@@ -10,6 +10,7 @@ pacman::p_load(
   "arrow",
   "haven",
   "sjlabelled",
+  "posterior",
   install = FALSE
 )
 
@@ -229,7 +230,9 @@ std_outcome_test_fit$save_object(
 std_test_draws <- std_outcome_test_fit$draws(
   variables = c("ATE", "EYX1", "EYX0", "b", "b_Intercept"), 
   format = "draws_df"
-)
+  ) %>% 
+  # Calculate the log risk ratios
+  mutate(logrr = log(EYX1/EYX0), .before = 2)
 
 # Write the draws to a parquet file
 write_parquet(
@@ -270,12 +273,38 @@ std_outcome_treat_fit$save_object(
 std_treat_draws <- std_outcome_treat_fit$draws(
   variables = c("ATE", "EYX1", "EYX0", "b", "b_Intercept"), 
   format = "draws_df"
-)
+  ) %>% 
+  # Calculate the log risk ratios
+  mutate(logrr = log(EYX1/EYX0), .before = 2)
 
 # Write the draws to a parquet file
 write_parquet(
   std_treat_draws,
   "output/predictions/treat_std_posterior_draws.gz.parquet",
+  compression = "gzip",
+  compression_level = 7
+)
+
+# Put everything together in a draws tibble
+table_draws <- tibble(
+  ATE_Treat_IPWM = ipwm_treat_draws$ATE,
+  LRR_Treat_IPWM = ipwm_treat_draws$logrr,
+  ATE_Treat = std_treat_draws$ATE,
+  LRR_Treat = std_treat_draws$logrr,
+  ATE_Test_IPWM = ipwm_test_draws$ATE,
+  LRR_Test_IPWM = ipwm_test_draws$logrr,
+  ATE_Test = std_test_draws$ATE,
+  LRR_Test =  std_test_draws$logrr,
+  .chain = std_test_draws$.chain,
+  .iteration = std_test_draws$.iteration,
+  .draw = std_test_draws$.draw
+) %>% 
+  as_draws_df()
+
+# Write the draws to a parquet file
+write_parquet(
+  table_draws,
+  "output/predictions/posterior_draws.gz.parquet",
   compression = "gzip",
   compression_level = 7
 )

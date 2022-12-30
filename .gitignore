@@ -38,5 +38,5 @@ vignettes/*.pdf
 # R Environment Variables
 .Renviron
 
-output\fits\*.rds
-output\predictions
+output/fits/*.rds
+output/predictions/*ipwm*
