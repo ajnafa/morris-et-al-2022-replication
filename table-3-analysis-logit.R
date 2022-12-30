@@ -308,3 +308,94 @@ write_parquet(
   compression = "gzip",
   compression_level = 7
 )
+
+#------------------------------------------------------------------------------#
+#-------------Standardized Differences brms, Complete Cases Models--------------
+#------------------------------------------------------------------------------#
+
+# Define the custom stanvars for the bootstrapped g-formula
+gformula_vars <- stanvar(
+  x = 1,
+  name = "treat_pos",
+  block = "data",
+  scode = "int<lower = 1, upper = K> treat_pos; // Treatment Position"
+) +
+  stanvar(
+    scode = "// Bootstrap Probabilities
+  vector[N] boot_probs = rep_vector(1.0/N, N);
+  
+  // Matrices for the bootstrapped predictions
+  matrix[N, Kc] Xa; 
+  matrix[N, Kc] Xb;
+  
+  // Potential Outcome Y(X = 1, Z)
+  Xa = X[, 2:K];
+  Xa[, treat_pos] = ones_vector(N);
+  
+  // Potential Outcome Y(X = 0, Z)
+  Xb = X[, 2:K];
+  Xb[, treat_pos] = zeros_vector(N);",
+  position = "end",
+  block = "tdata"
+  ) +
+  stanvar(
+    scode = "// Row index to be sampled for bootstrap
+int row_i;
+
+// Calculate Effect Estimates in the Bootstrapped sample
+real ATE = 0.00;
+array[N] real Y_X1; // Potential Outcome Y(X = 1, Z)
+array[N] real Y_X0; // Potential Outcome Y(X = 0, Z)
+
+for (n in 1:N) {
+  // Sample the Baseline Covariates
+  row_i = categorical_rng(boot_probs);
+  
+  // Sample Y(x) where x = 1 and x = 0
+  Y_X1[n] = bernoulli_logit_rng(b_Intercept + Xa[row_i] * b);
+  Y_X0[n] = bernoulli_logit_rng(b_Intercept + Xb[row_i] * b);
+  
+  // Add Contribution of the ith Observation to the Bootstrapped AME
+  ATE = ATE + (Y_X1[n] - Y_X0[n])/N;
+}
+
+// Take the mean of the posterior expectations
+real EYX1 = mean(Y_X1); // E[Y | X = 1, Z]
+real EYX0 = mean(Y_X0); // E[Y | X = 0, Z]",
+  position = "end",
+  block = "genquant"
+  )
+
+# Test Outcome Model
+anytest_bf <- bf(
+  anytest ~ group + gender + age + partners + msm + ethnicgrp,
+  family = bernoulli(link = "logit")
+   )
+
+# Priors for the parameters
+anytest_priors <- prior(normal(0, 1), class = b) +
+  prior(normal(0, 1.5), class = Intercept)
+
+# Logistic regression for the anytest outcome
+brms_anytest_logit <- brm(
+  formula = anytest_bf,
+  prior = anytest_priors,
+  data = df,
+  cores = 6,
+  chains = 6,
+  iter = 8000, 
+  warmup = 3000,
+  refresh = 1e3, 
+  control = list(max_treedepth = 12),
+  stanvars = gformula_vars,
+  save_pars = save_pars(all = TRUE),
+  backend = "cmdstanr", 
+  file = "output/fits/brms_anytest_std_model_logit.rds"
+)
+
+# Print the quantities of interest
+as_draws_df(brms_anytest_logit) %>% 
+  select(ATE, EYX1, EYX0, .chain:.draw) %>% 
+  mutate(LRR = log(EYX1/EYX0)) %>% 
+  summarise_draws()
+  
